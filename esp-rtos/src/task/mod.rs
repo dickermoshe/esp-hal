@@ -98,11 +98,14 @@ macro_rules! task_list_item {
     };
 }
 
-task_list_item!(
-    TaskReadyQueueElement,
-    ready_queue_item,
-    in_run_or_wait_queue
-);
+task_list_item!(TaskReadyQueueElement, ready_queue_item, in_run_queue);
+// The wait queue uses a dedicated link and flag. A task must be able to be in a wait queue and the
+// run queue at the same time: when a task is woken (e.g. from a radio interrupt) there is a brief
+// window before the deferred context switch runs in which the task is simultaneously considered
+// ready and still referenced by the wait queue it was blocked on. Sharing the link/flag with the
+// run queue in that window corrupts both lists, so they must be independent.
+#[cfg(feature = "esp-radio")]
+task_list_item!(TaskWaitQueueElement, wait_queue_item, in_wait_queue);
 task_list_item!(TaskTimerQueueElement, timer_queue_item, timer_queued);
 // These aren't perf critical, no need to waste memory on caching list status:
 task_list_item!(TaskAllocListElement, alloc_list_item);
@@ -364,7 +367,10 @@ pub(crate) struct Task {
     pub wakeup_at: u64,
 
     /// Whether the task is currently queued in the run queue.
-    pub in_run_or_wait_queue: bool,
+    pub in_run_queue: bool,
+    /// Whether the task is currently queued in a wait queue.
+    #[cfg(feature = "esp-radio")]
+    pub in_wait_queue: bool,
     /// Whether the task is currently queued in the timer queue.
     pub timer_queued: bool,
 
@@ -376,8 +382,12 @@ pub(crate) struct Task {
     /// The list of all allocated tasks
     pub alloc_list_item: TaskListItem,
 
-    /// Either the RunQueue or the WaitQueue
+    /// The RunQueue.
     pub ready_queue_item: TaskListItem,
+
+    /// The WaitQueue this task is blocked on (independent from `ready_queue_item`).
+    #[cfg(feature = "esp-radio")]
+    pub wait_queue_item: TaskListItem,
 
     /// The timer queue
     pub timer_queue_item: TaskListItem,
@@ -502,10 +512,14 @@ impl Task {
 
             wakeup_at: 0,
             timer_queued: false,
-            in_run_or_wait_queue: false,
+            in_run_queue: false,
+            #[cfg(feature = "esp-radio")]
+            in_wait_queue: false,
 
             alloc_list_item: TaskListItem::None,
             ready_queue_item: TaskListItem::None,
+            #[cfg(feature = "esp-radio")]
+            wait_queue_item: TaskListItem::None,
             timer_queue_item: TaskListItem::None,
             delete_list_item: TaskListItem::None,
 
@@ -608,9 +622,11 @@ pub(super) fn allocate_main_task(
     scheduler.per_cpu[current_cpu].main_task.priority = Priority::ZERO;
     scheduler.per_cpu[current_cpu].main_task.state = TaskState::Ready;
     scheduler.per_cpu[current_cpu].main_task.stack = stack;
-    scheduler.per_cpu[current_cpu]
-        .main_task
-        .in_run_or_wait_queue = false;
+    scheduler.per_cpu[current_cpu].main_task.in_run_queue = false;
+    #[cfg(feature = "esp-radio")]
+    {
+        scheduler.per_cpu[current_cpu].main_task.in_wait_queue = false;
+    }
     scheduler.per_cpu[current_cpu].main_task.timer_queued = false;
     #[cfg(multi_core)]
     {

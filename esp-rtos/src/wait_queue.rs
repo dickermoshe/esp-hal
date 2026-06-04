@@ -4,14 +4,16 @@ use esp_hal::time::Instant;
 
 use crate::{
     SCHEDULER,
-    task::{TaskList, TaskPtr, TaskReadyQueueElement},
+    task::{TaskList, TaskPtr, TaskWaitQueueElement},
 };
 
 pub(crate) struct WaitQueue {
-    // A task is either blocked, or ready. Since it can't be both, we can reuse the ready queue
-    // element. Note however, that a task can simultaneously be in the timer queue and a wait
-    // queue!
-    pub(crate) waiting_tasks: TaskList<TaskReadyQueueElement>,
+    // The wait queue uses its own intrusive link (`wait_queue_item`), separate from the run queue's
+    // (`ready_queue_item`). A task can transiently be referenced by both a wait queue and the run
+    // queue (a wakeup marks the task ready before the deferred context switch has removed it from
+    // the wait queue's perspective), so the two lists must not share storage. Note also that a task
+    // can simultaneously be in the timer queue and a wait queue.
+    pub(crate) waiting_tasks: TaskList<TaskWaitQueueElement>,
 }
 
 impl WaitQueue {

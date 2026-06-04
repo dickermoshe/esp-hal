@@ -97,11 +97,15 @@ impl CpuState {
                 pinned_to: None,
 
                 wakeup_at: 0,
-                in_run_or_wait_queue: false,
+                in_run_queue: false,
+                #[cfg(feature = "esp-radio")]
+                in_wait_queue: false,
                 timer_queued: false,
 
                 alloc_list_item: TaskListItem::None,
                 ready_queue_item: TaskListItem::None,
+                #[cfg(feature = "esp-radio")]
+                wait_queue_item: TaskListItem::None,
                 timer_queue_item: TaskListItem::None,
                 delete_list_item: TaskListItem::None,
 
@@ -409,29 +413,20 @@ impl SchedulerState {
         self.all_tasks.remove(task);
         unwrap!(self.time_driver.as_mut()).timer_queue.remove(task);
 
+        // A task may be referenced by a wait queue and the run queue at the same time, so make sure
+        // it is unlinked from both before it is deleted. Leaving a deleted (and possibly freed) task
+        // linked in either list leads to dereferencing a dangling pointer later.
         if let Some(mut containing_queue) = unsafe { task.as_mut().current_wait_queue.take() } {
             unsafe { containing_queue.as_mut().remove(task) };
-        } else {
-            self.run_queue.remove(task);
         }
+        self.run_queue.remove(task);
     }
 
     pub(crate) fn set_priority(&mut self, mut task: TaskPtr, new_priority: Priority) {
         // If the task is in a run queue, it needs to be moved to the new priority's run queue.
-        let task_in_run_queue = {
-            let task = unsafe { task.as_ref() };
-            let in_queue = task.in_run_or_wait_queue;
-
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "esp-radio")] {
-                    let in_waitqueue = task.current_wait_queue.is_some();
-                } else {
-                    let in_waitqueue = false;
-                }
-            }
-
-            in_queue && !in_waitqueue
-        };
+        // `in_run_queue` only tracks run queue membership (wait queue membership is tracked
+        // separately), so it answers this question precisely.
+        let task_in_run_queue = unsafe { task.as_ref().in_run_queue };
 
         if task_in_run_queue {
             self.run_queue.remove(task);
