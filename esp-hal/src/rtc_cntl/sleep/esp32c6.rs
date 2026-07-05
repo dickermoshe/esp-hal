@@ -581,7 +581,6 @@ impl ParamSleepConfig {
 #[derive(Clone, Copy)]
 struct SleepTimeConfig {
     sleep_time_adjustment: u32,
-    // TODO: esp-idf does some calibration here to determine slowclk_period
     slowclk_period: u32,
     fastclk_period: u32,
 }
@@ -599,8 +598,11 @@ impl SleepTimeConfig {
         // https://github.com/espressif/esp-idf/commit/e1d24ebd7f43c7c7ded183bc8800b20af3bf014b
 
         // Calibrate rtc slow clock
-        // TODO: do an actual calibration instead of a read
-        let slowclk_period = unsafe { lp_aon().store1().read().data().bits() };
+        const RTC_CLK_SRC_CAL_CYCLES: u32 = 10;
+        let slowclk_period = RtcClock::calibrate(
+            TimgCalibrationClockConfig::RcSlowClk,
+            RTC_CLK_SRC_CAL_CYCLES,
+        );
 
         // Calibrate rtc fast clock, only PMU supported chips sleep process is needed.
         const FAST_CLK_SRC_CAL_CYCLES: u32 = 2048;
